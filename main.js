@@ -1,7 +1,6 @@
 //https://npm.io/package/rpio
 const rpio = require('rpio');
 
-
 class it8951{ 
 	constructor(){
 		this.PINS = {
@@ -13,7 +12,7 @@ class it8951{
 		rpio.spiBegin();
 		rpio.spiChipSelect(1);     
 		rpio.spiSetCSPolarity(1, rpio.LOW);  
-		rpio.spiSetClockDivider(32);     
+		rpio.spiSetClockDivider(32); //32 = 7.8MHz, 16 = 15.6MHz, 8 = 31.2MHz. Gemäss Doku wäre Max. 24MHz möglich
 		rpio.spiSetDataMode(0);
 		
 		rpio.open(this.PINS.CS, rpio.OUTPUT, rpio.HIGH);

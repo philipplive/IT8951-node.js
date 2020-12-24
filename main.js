@@ -14,6 +14,7 @@ class it8951 {
 			width: undefined,
 			height: undefined,
 			bufferAddr: undefined, // 4 Byte
+			bufferAddrArray: undefined, // 4 Byte Array
 			FWVersion: undefined,  // 16 Byte
 			LUTVersion: undefined // 16 Byte
 		}
@@ -32,12 +33,28 @@ class it8951 {
 			G270: 3
 		};
 
+		// Befehle
 		this.CMD = {
 			SYS_RUN: [0x00, 0x01],
 			STANDBY: [0x00, 0x02],
 			SLEEP: [0x00, 0x03],
 			REG_READ: [0x00, 0x10],
 			REG_WRITE: [0x00, 0x11],
+			MEM_BURST_READ_TRIGGER: [0x00, 0x12],
+			MEM_BURST_READ_START: [0x00, 0x13],
+			MEM_BURST_WRITE: [0x00, 0x14],
+			MEM_BURST_END: [0x00, 0x15],
+			LOAD_FULL_IMAGE: [0x00, 0x20],
+			LOAD_IMAGE_AREA: [0x00, 0x21],
+			LOAD_IMAGE_END: [0x00, 0x21]
+		}
+
+		// Befehle
+		this.CMD_I80 = {
+			DISPLAY_AREA: [0x00, 0x34],
+			GET_DISPLAY_INFO: [0x03, 0x02],
+			DISPLAY_BUFFER_AREA: [0x00, 0x37],
+			SET_VCOM: [0x00, 0x39],
 		}
 
 		// Bit per Pixel
@@ -57,10 +74,21 @@ class it8951 {
 			MODE4: 4
 		};
 
+		this.ENDIANNESS = {
+			LITTLE: 0,
+			BIG: 1
+		};
+
+		this.MCSR_REG = {
+			BASE: [0x02, 0x00],
+			MSCR: [0x02, 0x00],
+			LISAR: [0x00, 0x16]
+		};
+
 		rpio.spiBegin();
 		rpio.spiChipSelect(1);
 		rpio.spiSetCSPolarity(1, rpio.LOW);
-		rpio.spiSetClockDivider(32); //32 = 7.8MHz, 16 = 15.6MHz, 8 = 31.2MHz. Gemäss Doku wäre Max. 24MHz möglich
+		rpio.spiSetClockDivider(32); //32 = 7.8MHz, 16 = 15.6MHz, 8 = 31.2MHz. Gemäss Doku wäre Max. 24MHz möglich // Bei >=16 ist die Ausgabe Fehlerhaft!
 		rpio.spiSetDataMode(0);
 
 		rpio.open(this.PINS.CS, rpio.OUTPUT, rpio.HIGH);
@@ -69,6 +97,57 @@ class it8951 {
 
 		this.reset();
 		this.getDisplayInfos();
+		this.loadImage(0, 0, 50, 50, 0);
+		this.displayArea(0, 0, 50, 50);
+	}
+
+	loadImage(x, y, width, height, image, bpp = this.PIXEL_MODE.BPP8) {
+		// IMG Buffer adresse setzen
+
+		// 0x00119F00
+		//uint16_t usWordH = (uint16_t)((ulImgBufAddr >> 16) & 0x0000FFFF);
+		//uint16_t usWordL = (uint16_t)( ulImgBufAddr & 0x0000FFFF);
+		//Write LISAR Reg
+		//IT8951WriteReg(LISAR + 2, [this.display.bufferAddrArray[2], this.display.bufferAddrArray[3]]);
+		//IT8951WriteReg(LISAR, 5);
+
+		console.log(this.display.bufferAddrArray);
+		this.writeRegistr([0x00, 0x18], [this.display.bufferAddrArray[0], this.display.bufferAddrArray[1]]);
+		this.writeRegistr([0x00, 0x16], [this.display.bufferAddrArray[2], this.display.bufferAddrArray[3]]);
+
+		this.writeCmdSPI(this.CMD.LOAD_IMAGE_AREA);
+
+		let settings = (this.ENDIANNESS.LITTLE << 8) | (bpp << 4) | this.ROTATE.G0;
+		console.log(settings);
+
+		this.writeDataSPI([
+			0x00, settings,
+			0x00, 0x00, //x
+			0x00, 0x00, //y
+			0x00, 0x00, //w
+			0x00, 0x00 //h
+		]);
+
+		let img = new Array(2500);
+		img.fill(0xF0); //F0 White
+		this.writeDataSPI(img);
+		console.log('written');
+		this.writeCmdSPI(this.CMD.LOAD_IMAGE_END);
+		console.log('end');
+	}
+
+	displayArea(x, y, width, height, mode = this.WAVEFORM.MODE4) {
+		this.writeCmdSPI(this.CMD_I80.DISPLAY_AREA);
+		console.log('area');
+		this.writeWordSPI([0x00, 0x00]); //x
+		console.log('area1');
+		this.writeWordSPI([0x00, 0x00]); //y
+		console.log('area2');
+		this.writeWordSPI([0x00, 0x50]); //w
+		console.log('area3');
+		this.writeWordSPI([0x00, 0x50]); //h
+		console.log('m');
+		this.writeWordSPI(mode); //mode
 	}
 
 	/**
@@ -80,16 +159,15 @@ class it8951 {
 	}
 
 	getDisplayInfos() {
-		this.writeCmdSPI([0x03, 0x02]);
+		this.writeCmdSPI(this.CMD_I80.GET_DISPLAY_INFO);
 		let data = this.readSPI(40);
 
 		this.display.width = data[1] | (data[0] << 8);
 		this.display.height = data[3] | (data[2] << 8);
 		this.display.bufferAddr = data[5] | (data[4] << 8) | (data[7] << 16) | (data[6] << 24);
-		this.display.FWVersion = data.toString('utf8', 8, 24);
-		this.display.LUTVersion = data.toString('utf8', 25, 40);
-
-		console.log(this.display);
+		this.display.bufferAddrArray = [data[6], data[7], data[4], data[5]]; // 0x00119F00
+		this.display.FWVersion = data.toString('utf8', 8, 24).replace(/\0/g, '');
+		this.display.LUTVersion = data.toString('utf8', 25, 40).replace(/\0/g, '');
 	}
 
 	/**
@@ -108,6 +186,27 @@ class it8951 {
 	}
 
 	/**
+	 * Standard Modus
+	 */
+	wakeUp() {
+		this.writeCmdSPI(this.CMD.SYS_RUN);
+	}
+
+	/**
+	 * Standby
+	 */
+	standBy() {
+		this.writeCmdSPI(this.CMD.standBy);
+	}
+
+	/**
+	 * Schlafmodus
+	 */
+	sleep() {
+		this.writeCmdSPI(this.CMD.SLEEP);
+	}
+
+	/**
 	 * Reset
 	 */
 	reset() {
@@ -117,19 +216,15 @@ class it8951 {
 		rpio.msleep(100);
 	}
 
-	setPixels(x, y, w, h, image) {
-		this.writeRegistr();
-	}
-
 	/**
 	 * Befehl ausführen
 	 * @param {array} cmd 2 Byte 
 	 */
 	writeCmdSPI(cmd) {
 		this.waitForDisplayReady();
+		this.setCS();
 
 		// Preamble
-		this.setCS();
 		rpio.spiWrite(Buffer.from([0x60, 0x00]), 2);
 
 		this.waitForDisplayReady();
@@ -146,13 +241,14 @@ class it8951 {
 	writeWordSPI(word) {
 		this.waitForDisplayReady();
 		this.setCS();
+
 		//Preamble
-		rpio.spiWrite(Buffer.from([0x00, 0x00]));
+		rpio.spiWrite(Buffer.from([0x00, 0x00]), 2);
 
 		this.waitForDisplayReady();
 
 		// Wort senden
-		rpio.spiWrite(word);
+		rpio.spiWrite(Buffer.from(word), 2);
 
 		this.setCS(false);
 	}
@@ -166,12 +262,13 @@ class it8951 {
 		this.setCS();
 
 		//Preamble
-		rpio.spiWrite(Buffer.from([0x00, 0x00]));
+		rpio.spiWrite(Buffer.from([0x00, 0x00]), 2);
 
 		this.waitForDisplayReady();
 
 		// Daten
-		rpio.spiTransfer(data, data.length);
+		let sendData = Buffer.from(data);
+		rpio.spiWrite(sendData, sendData.length);
 	}
 
 	/**
@@ -180,19 +277,21 @@ class it8951 {
 	 * @param {array} value 2 Byte
 	 */
 	writeRegistr(reg, value) {
-		this.writeCmdSPI(Buffer.from(this.CMD.REG_WRITE));
-		this.writeWordSPI(Buffer.from(reg));
-		this.writeWordSPI(Buffer.from(value));
+		console.log(reg);
+		console.log(value);
+		this.writeCmdSPI(this.CMD.REG_WRITE);
+		this.writeWordSPI(reg);
+		this.writeWordSPI(value);
 	}
 
 	/**
-	 * Register schreiben
+	 * Register lesen
 	 * @param {array} addr 2 Byte
 	 * @return {Buffer}
 	 */
 	readRegistr(addr) {
-		this.writeCmdSPI(Buffer.from(this.CMD.REG_READ));
-		this.writeWordSPI(Buffer.from(addr));
+		this.writeCmdSPI(this.CMD.REG_READ);
+		this.writeWordSPI(addr);
 		return this.readSPI(2);
 	}
 
@@ -202,7 +301,7 @@ class it8951 {
 	 * @return {Buffer}
 	 */
 	readSPI(length) {
-		// Die ersten beiden empfangenen Bytes sind Dummys, daher löschen
+		// Die ersten beiden empfangenen Bytes sind von der Preamble, daher löschen
 		let tx = Buffer.alloc(length + 2);
 		let rx = Buffer.alloc(length + 2);
 

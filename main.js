@@ -12,7 +12,9 @@ class it8951 {
 		 */
 		this.display = {
 			width: undefined,
+			widthArray: undefined,
 			height: undefined,
+			heightArray: undefined,
 			bufferAddr: undefined, // 4 Byte
 			bufferAddrArray: undefined, // 4 Byte Array
 			FWVersion: undefined,  // 16 Byte
@@ -67,11 +69,14 @@ class it8951 {
 
 		// Waveform Mode
 		this.WAVEFORM = {
-			MODE0: 0,
-			MODE1: 1,
-			MODE2: 2,
+			MODE0: 0, // Clear
+			MODE1: 1, // None-Flash, aber nur für Wechsel von Grau auf Weiss/Schwarz!
+			MODE2: 2, // Bilder
 			MODE3: 3,
-			MODE4: 4
+			MODE4: 4,
+			MODE4: 5,
+			MODE4: 6,
+			MODE4: 7
 		};
 
 		this.ENDIANNESS = {
@@ -82,7 +87,7 @@ class it8951 {
 		this.MCSR_REG = {
 			BASE: [0x02, 0x00],
 			MSCR: [0x02, 0x00],
-			LISAR: [0x00, 0x16]
+			LISAR: [0x02, 0x08]
 		};
 
 		rpio.spiBegin();
@@ -97,57 +102,71 @@ class it8951 {
 
 		this.reset();
 		this.getDisplayInfos();
-		this.loadImage(0, 0, 50, 50, 0);
-		this.displayArea(0, 0, 50, 50);
+		this.displayClear();
+
+		this.loadImage(50, 100, 100, 50, 0x00);
+		this.displayArea(50, 100, 100, 50);
+
+		this.loadImage(400, 100, 100, 50, 0x00);
+		this.displayArea(400, 100, 100, 50);
 	}
 
-	loadImage(x, y, width, height, image, bpp = this.PIXEL_MODE.BPP8) {
+	/**
+	 * Display komplett Weiss
+	 */
+	displayClear() {
+		this.displayArea(0, 0, this.display.width, this.display.height, this.WAVEFORM.MODE0);
+	}
+
+	loadImage(x, y, width, height, image) {
 		// IMG Buffer adresse setzen
-
-		// 0x00119F00
-		//uint16_t usWordH = (uint16_t)((ulImgBufAddr >> 16) & 0x0000FFFF);
-		//uint16_t usWordL = (uint16_t)( ulImgBufAddr & 0x0000FFFF);
-		//Write LISAR Reg
-		//IT8951WriteReg(LISAR + 2, [this.display.bufferAddrArray[2], this.display.bufferAddrArray[3]]);
-		//IT8951WriteReg(LISAR, 5);
-
-		console.log(this.display.bufferAddrArray);
-		this.writeRegistr([0x00, 0x18], [this.display.bufferAddrArray[0], this.display.bufferAddrArray[1]]);
-		this.writeRegistr([0x00, 0x16], [this.display.bufferAddrArray[2], this.display.bufferAddrArray[3]]);
+		this.writeRegistr([this.MCSR_REG.LISAR[0], this.MCSR_REG.LISAR[1] + 2], [this.display.bufferAddrArray[0], this.display.bufferAddrArray[1]]);
+		this.writeRegistr([this.MCSR_REG.LISAR[0], this.MCSR_REG.LISAR[1]], [this.display.bufferAddrArray[2], this.display.bufferAddrArray[3]]);
 
 		this.writeCmdSPI(this.CMD.LOAD_IMAGE_AREA);
 
-		let settings = (this.ENDIANNESS.LITTLE << 8) | (bpp << 4) | this.ROTATE.G0;
-		console.log(settings);
+		// Einstellungen
+		let settings = (this.ENDIANNESS.LITTLE << 8) | (this.PIXEL_MODE.BPP8 << 4) | this.ROTATE.G0;
 
-		this.writeDataSPI([
-			0x00, settings,
-			0x00, 0x00, //x
-			0x00, 0x00, //y
-			0x00, 0x00, //w
-			0x00, 0x00 //h
-		]);
+		this.writeDataSPI(
+			[0x00, settings]
+				.concat(this.intToWord(x))
+				.concat(this.intToWord(y))
+				.concat(this.intToWord(width))
+				.concat(this.intToWord(height))
+		);
 
-		let img = new Array(2500);
-		img.fill(0xF0); //F0 White
+		// Test
+		let img = new Array(height * width);
+		img.fill(image); //F0 White
+
+		// Bilddaten schreiben
 		this.writeDataSPI(img);
-		console.log('written');
 		this.writeCmdSPI(this.CMD.LOAD_IMAGE_END);
-		console.log('end');
 	}
 
-	displayArea(x, y, width, height, mode = this.WAVEFORM.MODE4) {
+	displayArea(x, y, width, height, mode = this.WAVEFORM.MODE2) {
 		this.writeCmdSPI(this.CMD_I80.DISPLAY_AREA);
-		console.log('area');
-		this.writeWordSPI([0x00, 0x00]); //x
-		console.log('area1');
-		this.writeWordSPI([0x00, 0x00]); //y
-		console.log('area2');
-		this.writeWordSPI([0x00, 0x50]); //w
-		console.log('area3');
-		this.writeWordSPI([0x00, 0x50]); //h
-		console.log('m');
-		this.writeWordSPI(mode); //mode
+		this.writeWordSPI(this.intToWord(x)); //x
+		this.writeWordSPI(this.intToWord(y)); //y
+		this.writeWordSPI(this.intToWord(width)); //w
+		this.writeWordSPI(this.intToWord(height)); //h
+		this.writeWordSPI([0x00, mode]); //mode
+	}
+
+	/**
+	 * Integer Wert zu 2 Byte Array
+	 * @param {int} value 
+	 * @return Array
+	 */
+	intToWord(value) {
+		var bytes = [];
+		var i = 2;
+		do {
+			bytes[--i] = value & (255);
+			value = value >> 8;
+		} while (i)
+		return bytes;
 	}
 
 	/**
@@ -158,12 +177,17 @@ class it8951 {
 		rpio.write(this.PINS.CS, on ? rpio.LOW : rpio.HIGH);
 	}
 
+	/**
+	 * Displayinformationen auslesen
+	 */
 	getDisplayInfos() {
 		this.writeCmdSPI(this.CMD_I80.GET_DISPLAY_INFO);
 		let data = this.readSPI(40);
 
 		this.display.width = data[1] | (data[0] << 8);
+		this.display.widthArray = [data[0], data[1]];
 		this.display.height = data[3] | (data[2] << 8);
+		this.display.heightArray = [data[2], data[3]];
 		this.display.bufferAddr = data[5] | (data[4] << 8) | (data[7] << 16) | (data[6] << 24);
 		this.display.bufferAddrArray = [data[6], data[7], data[4], data[5]]; // 0x00119F00
 		this.display.FWVersion = data.toString('utf8', 8, 24).replace(/\0/g, '');
@@ -277,8 +301,6 @@ class it8951 {
 	 * @param {array} value 2 Byte
 	 */
 	writeRegistr(reg, value) {
-		console.log(reg);
-		console.log(value);
 		this.writeCmdSPI(this.CMD.REG_WRITE);
 		this.writeWordSPI(reg);
 		this.writeWordSPI(value);

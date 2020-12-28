@@ -1,10 +1,12 @@
-//https://npm.io/package/rpio
-const rpio = require('rpio');
+const rpio = require('rpio'); //https://npm.io/package/rpio
+const bmp = require("bmp-js");
+const fs = require("fs");
+const Jimp = require('jimp');
 
 class it8951 {
 	constructor() {
 		/**
-		 * Beispiel
+		 * Beispiel:
 		 * Panel(W,H) = (1872,1404)
 		 * Image Buffer Address = 00119F00
 		 * FW Version = SWv_0.1.
@@ -21,6 +23,7 @@ class it8951 {
 			LUTVersion: undefined // 16 Byte
 		}
 
+		// Pinbelegung
 		this.PINS = {
 			CS: 24,
 			RESET: 11,
@@ -75,50 +78,99 @@ class it8951 {
 			MODE3: 3,
 			MODE4: 4,
 			MODE4: 5,
-			MODE4: 6,
+			MODE4: 6, // Nur S/W, None-Flash, sehr schnell (120ms)
 			MODE4: 7
 		};
 
+		// Byte-Reihenfolge
 		this.ENDIANNESS = {
 			LITTLE: 0,
 			BIG: 1
 		};
 
+		// Memory Converter Registers
 		this.MCSR_REG = {
 			BASE: [0x02, 0x00],
 			MSCR: [0x02, 0x00],
 			LISAR: [0x02, 0x08]
 		};
 
+		// Init
 		rpio.spiBegin();
 		rpio.spiChipSelect(1);
 		rpio.spiSetCSPolarity(1, rpio.LOW);
-		rpio.spiSetClockDivider(32); //32 = 7.8MHz, 16 = 15.6MHz, 8 = 31.2MHz. Gemäss Doku wäre Max. 24MHz möglich // Bei >=16 ist die Ausgabe Fehlerhaft!
+		rpio.spiSetClockDivider(32); //32 = 7.8MHz, 16 = 15.6MHz, 8 = 31.2MHz. Gemäss Doku wäre Max. 24MHz möglich // Bei >=16 ist die Ausgabe fehlerhaft!
 		rpio.spiSetDataMode(0);
 
 		rpio.open(this.PINS.CS, rpio.OUTPUT, rpio.HIGH);
 		rpio.open(this.PINS.READY, rpio.INPUT);
 		rpio.open(this.PINS.RESET, rpio.OUTPUT, rpio.HIGH);
 
+		// Bildschirm Init
 		this.reset();
 		this.getDisplayInfos();
+
+		// Testscript
 		this.displayClear();
+		this.loadImage('test.jpg');
+	}
 
-		this.loadImage(50, 100, 100, 50, 0x00);
-		this.displayArea(50, 100, 100, 50);
+	/**
+	 * Bild direkt laden (png,jpg)
+	 * @param {string} path 
+	 * @param {int} x 
+	 * @param {int} y 
+	 */
+	loadImage(path, x, y) {
+		Jimp.read(path, (err, img) => {
+			if (err) throw err;
+			img
+				.resize(this.display.width, this.display.height) // resize
+				.greyscale(); // set greyscale; // save
 
-		this.loadImage(400, 100, 100, 50, 0x00);
-		this.displayArea(400, 100, 100, 50);
+			img.getBuffer(Jimp.MIME_BMP, (err, buffer) => {
+				this.loadBmp(buffer, x, y);
+			});
+		});
+	}
+
+	/**
+	 * 
+	 * @param {Buffer} BMP Image 
+	 * @param {int} x 
+	 * @param {int} y 
+	 */
+	loadBmp(buffer, x, y) {
+		var bmpData = bmp.decode(buffer);
+		var imgData = new Array(bmpData.width * bmpData.height);
+
+		// Bild drehen und in Array übertragen
+		for (var w = 0; w < bmpData.width; w++) {
+			for (var h = 0; h < bmpData.height; h++) {
+				imgData[w + ((bmpData.height - h) * bmpData.width)] = bmpData.data[(w + (h * bmpData.width)) * 4 + 1];
+			}
+		}
+
+		this.displaySetData(x, y, bmpData.width, bmpData.height, imgData);
+		this.displayRenderArea(x, y, bmpData.width, bmpData.height);
 	}
 
 	/**
 	 * Display komplett Weiss
 	 */
 	displayClear() {
-		this.displayArea(0, 0, this.display.width, this.display.height, this.WAVEFORM.MODE0);
+		this.displayRenderArea(0, 0, this.display.width, this.display.height, this.WAVEFORM.MODE0);
 	}
 
-	loadImage(x, y, width, height, image) {
+	/**
+	 * Pixeldaten in den Display Speicher übertragen
+	 * @param {int} x 
+	 * @param {int} y 
+	 * @param {int} width 
+	 * @param {int} height 
+	 * @param {int} image 
+	 */
+	displaySetData(x, y, width, height, image) {
 		// IMG Buffer adresse setzen
 		this.writeRegistr([this.MCSR_REG.LISAR[0], this.MCSR_REG.LISAR[1] + 2], [this.display.bufferAddrArray[0], this.display.bufferAddrArray[1]]);
 		this.writeRegistr([this.MCSR_REG.LISAR[0], this.MCSR_REG.LISAR[1]], [this.display.bufferAddrArray[2], this.display.bufferAddrArray[3]]);
@@ -136,26 +188,32 @@ class it8951 {
 				.concat(this.intToWord(height))
 		);
 
-		// Test
-		let img = new Array(height * width);
-		img.fill(image); //F0 White
+
 
 		// Bilddaten schreiben
-		this.writeDataSPI(img);
+		this.writeDataSPI(image);
 		this.writeCmdSPI(this.CMD.LOAD_IMAGE_END);
 	}
 
-	displayArea(x, y, width, height, mode = this.WAVEFORM.MODE2) {
+	/**
+	 * Bildbereich aus dem Speicher auf das Display zeichnen
+	 * @param {int} x 
+	 * @param {int} y 
+	 * @param {int} width 
+	 * @param {int} height 
+	 * @param {int} mode 
+	 */
+	displayRenderArea(x, y, width, height, mode = this.WAVEFORM.MODE2) {
 		this.writeCmdSPI(this.CMD_I80.DISPLAY_AREA);
-		this.writeWordSPI(this.intToWord(x)); //x
-		this.writeWordSPI(this.intToWord(y)); //y
-		this.writeWordSPI(this.intToWord(width)); //w
-		this.writeWordSPI(this.intToWord(height)); //h
-		this.writeWordSPI([0x00, mode]); //mode
+		this.writeDataSPI(this.intToWord(x)); //x
+		this.writeDataSPI(this.intToWord(y)); //y
+		this.writeDataSPI(this.intToWord(width)); //w
+		this.writeDataSPI(this.intToWord(height)); //h
+		this.writeDataSPI([0x00, mode]); //mode
 	}
 
 	/**
-	 * Integer Wert zu 2 Byte Array
+	 * Integer Wert zu 2 Byte Array konvertieren
 	 * @param {int} value 
 	 * @return Array
 	 */
@@ -259,26 +317,7 @@ class it8951 {
 	}
 
 	/**
-	 * 2 Byte senden
-	 * @param {array} 2 Byte  
-	 */
-	writeWordSPI(word) {
-		this.waitForDisplayReady();
-		this.setCS();
-
-		//Preamble
-		rpio.spiWrite(Buffer.from([0x00, 0x00]), 2);
-
-		this.waitForDisplayReady();
-
-		// Wort senden
-		rpio.spiWrite(Buffer.from(word), 2);
-
-		this.setCS(false);
-	}
-
-	/**
-	 * Daten senden
+	 * Bytes senden
 	 * @param {array} data 
 	 */
 	writeDataSPI(data) {
@@ -291,8 +330,9 @@ class it8951 {
 		this.waitForDisplayReady();
 
 		// Daten
-		let sendData = Buffer.from(data);
-		rpio.spiWrite(sendData, sendData.length);
+		rpio.spiWrite(Buffer.from(data), data.length);
+
+		this.setCS(false);
 	}
 
 	/**
@@ -302,8 +342,8 @@ class it8951 {
 	 */
 	writeRegistr(reg, value) {
 		this.writeCmdSPI(this.CMD.REG_WRITE);
-		this.writeWordSPI(reg);
-		this.writeWordSPI(value);
+		this.writeDataSPI(reg);
+		this.writeDataSPI(value);
 	}
 
 	/**
@@ -313,7 +353,7 @@ class it8951 {
 	 */
 	readRegistr(addr) {
 		this.writeCmdSPI(this.CMD.REG_READ);
-		this.writeWordSPI(addr);
+		this.writeDataSPI(addr);
 		return this.readSPI(2);
 	}
 

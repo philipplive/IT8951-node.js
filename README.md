@@ -1,11 +1,10 @@
-# IT8951 node.js Treiber
+# IT8951 node.js Treiber (Raspberry Pi)
+IT8951 Node.js Treiber auf einem Raspberry Pi Zero
 
-Node.js Treiber für einen IT8951. 
+Getestet mit einem Waveshare 10.3" E-Ink Display (1872×1404) / Raspberry Pi Zero.
 
-Funktionen:
-* getDisplayInfos
-
-## In progress...
+## Hinweis
+Leider ist die Performance relativ schlecht. Grund hierfür ist einerseits die hohe Auflösung (ein Komplettes Bild ist rund 2,6MB gross), sowie der max. SPI Takt von 25MHz (welchen ich auf dem Rasberry Pi leider real nicht stabil nutzen konnte). Für eine Refreshrate von 2Hz und höher sollte das USB-Interface genutzt werden.
 
 ## Dokumente
 * Platinenschema [> Link](https://www.waveshare.com/w/upload/b/be/E-Paper-IT8951-Driver-HAT-B-Schematic.pdf)
